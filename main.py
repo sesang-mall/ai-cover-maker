@@ -1,4 +1,5 @@
 import re
+import shutil
 import threading
 import subprocess
 import tkinter as tk
@@ -46,12 +47,14 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                                    segmented_button_selected_hover_color="#6a2a9a")
         self.tabs.pack(fill="both", expand=True, padx=20, pady=(10, 0))
 
-        for name in ("📚  모델 학습", "🎤  목소리 변환", "🎵  AI 커버 생성"):
+        for name in ("📚  모델 학습", "🎤  목소리 변환", "🎵  AI 커버 생성", "📖  사용법"):
             self.tabs.add(name)
 
         self._tab_train(self.tabs.tab("📚  모델 학습"))
         self._tab_convert(self.tabs.tab("🎤  목소리 변환"))
         self._tab_cover(self.tabs.tab("🎵  AI 커버 생성"))
+        self._tab_help(self.tabs.tab("📖  사용법"))
+        self._storage_bar()
         self._log_box()
 
     def _header(self):
@@ -224,6 +227,163 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                       command=self._on_cover).pack(fill="x", padx=4, pady=(4, 14))
 
     # ─────────────────────────────────────────────
+    # Tab 4 — 사용법
+    # ─────────────────────────────────────────────
+    def _tab_help(self, parent):
+        scroll = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        # ── 워크플로우 ──
+        wf = self._card(scroll, "🔄  전체 워크플로우")
+        steps = [
+            ("Step 1", "vocal-separator 앱으로 원하는 가수의 노래에서 보컬 분리",
+             "여러 곡 분리할수록 모델 품질 향상 (10곡 이상 권장)"),
+            ("Step 2", "📚 모델 학습 탭 → 소스 폴더 선택 → 전처리 시작",
+             "vocals.wav 를 10초 단위로 슬라이싱하여 학습 데이터셋 생성"),
+            ("Step 3", "학습 시작 (처음엔 20–30 epoch 로 테스트)",
+             "CPU 환경: epoch 당 약 3–8분 / 100 epoch = 약 5–13시간"),
+            ("Step 4", "🎵 AI 커버 생성 탭 → 원곡 + 모델 선택 → 생성",
+             "Demucs 분리 → RVC 변환 → 합성 순서로 자동 처리"),
+        ]
+        for title, desc, tip in steps:
+            row = ctk.CTkFrame(wf, fg_color="#16213e", corner_radius=8)
+            row.pack(fill="x", padx=14, pady=(0, 6))
+            ctk.CTkLabel(row, text=title,
+                         font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=ACCENT, width=60).pack(side="left", padx=(12, 8), pady=10)
+            col = ctk.CTkFrame(row, fg_color="transparent")
+            col.pack(side="left", fill="x", expand=True, pady=8)
+            ctk.CTkLabel(col, text=desc,
+                         font=ctk.CTkFont(size=11), anchor="w").pack(anchor="w")
+            ctk.CTkLabel(col, text=f"💡 {tip}",
+                         font=ctk.CTkFont(size=10), text_color=GRAY, anchor="w").pack(anchor="w")
+        ctk.CTkFrame(wf, height=6, fg_color="transparent").pack()
+
+        # ── 저장 위치 ──
+        st = self._card(scroll, "💾  저장 위치")
+        storage_info = [
+            ("학습 데이터셋",
+             "models/<모델명>/dataset/",
+             "노래 1곡(4분) 기준 약 30–80 MB\n곡 수에 따라 선형 증가"),
+            ("모델 파일 (.pth)",
+             "models/<모델명>/*.pth",
+             "모델 1개 약 60–200 MB\n(학습 epoch 수에 무관하게 고정)"),
+            ("Index 파일 (.index)",
+             "models/<모델명>/*.index",
+             "약 50–300 MB\n(학습 데이터 양에 비례)"),
+            ("변환 결과 / 커버곡",
+             "output/",
+             "WAV: 곡당 약 30–150 MB\nMP3 (320k): 곡당 약 8–15 MB"),
+        ]
+        for name, path, note in storage_info:
+            row = ctk.CTkFrame(st, fg_color="transparent")
+            row.pack(fill="x", padx=14, pady=(0, 8))
+            ctk.CTkLabel(row, text=name,
+                         font=ctk.CTkFont(size=11, weight="bold"),
+                         width=150, anchor="w").pack(side="left")
+            col = ctk.CTkFrame(row, fg_color="transparent")
+            col.pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(col, text=path,
+                         font=ctk.CTkFont(family="Consolas", size=10),
+                         text_color=ACCENT, anchor="w").pack(anchor="w")
+            ctk.CTkLabel(col, text=note,
+                         font=ctk.CTkFont(size=10), text_color=GRAY, anchor="w").pack(anchor="w")
+        ctk.CTkFrame(st, height=4, fg_color="transparent").pack()
+
+        # ── 음정 조절 가이드 ──
+        tp = self._card(scroll, "🎵  음정 조절 (Transpose) 가이드")
+        ctk.CTkLabel(tp,
+            text="남성 → 여성 목소리 모델:  +6 ~ +12 반음\n"
+                 "여성 → 남성 목소리 모델:  -6 ~ -12 반음\n"
+                 "같은 성별 목소리:          0 ~ ±3 반음\n\n"
+                 "※ 값이 너무 크면 음정이 부자연스러워집니다. ±6 단위로 테스트하세요.",
+            font=ctk.CTkFont(size=11), text_color="white",
+            justify="left").pack(anchor="w", padx=14, pady=(0, 14))
+
+        # ── CPU 학습 예상 시간 ──
+        tm = self._card(scroll, "⏱  CPU 학습 예상 소요 시간")
+        time_data = [
+            ("10 epoch  (테스트용)",   "30분 – 1시간 20분",  "목소리 특성 확인 가능"),
+            ("50 epoch  (기본)",       "2.5 – 7시간",        "어느 정도 자연스러운 변환"),
+            ("100 epoch (권장)",       "5 – 13시간",         "전반적으로 안정적인 품질"),
+            ("200 epoch (고품질)",     "10 – 27시간",        "밤새 학습 권장"),
+        ]
+        header = ctk.CTkFrame(tm, fg_color="#1a1a2e", corner_radius=6)
+        header.pack(fill="x", padx=14, pady=(0, 2))
+        for col_text, w in [("설정", 140), ("소요 시간", 160), ("결과", 300)]:
+            ctk.CTkLabel(header, text=col_text, width=w,
+                         font=ctk.CTkFont(size=10, weight="bold"),
+                         text_color=GRAY).pack(side="left", padx=6, pady=4)
+
+        for epoch, duration, quality in time_data:
+            row = ctk.CTkFrame(tm, fg_color="transparent")
+            row.pack(fill="x", padx=14)
+            for text, w, color in [
+                (epoch,    140, "white"),
+                (duration, 160, ACCENT),
+                (quality,  300, GRAY),
+            ]:
+                ctk.CTkLabel(row, text=text, width=w,
+                             font=ctk.CTkFont(size=10), text_color=color,
+                             anchor="w").pack(side="left", padx=6, pady=3)
+        ctk.CTkFrame(tm, height=8, fg_color="transparent").pack()
+
+    # ─────────────────────────────────────────────
+    # 저장공간 현황 바
+    # ─────────────────────────────────────────────
+    def _storage_bar(self):
+        bar = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=8, height=36)
+        bar.pack(fill="x", padx=20, pady=(6, 0))
+        bar.pack_propagate(False)
+
+        ctk.CTkLabel(bar, text="💾 저장공간",
+                     font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=GRAY).pack(side="left", padx=(12, 16))
+
+        self.lbl_models  = ctk.CTkLabel(bar, text="models/ : —",
+                                        font=ctk.CTkFont(size=10), text_color="white")
+        self.lbl_models.pack(side="left", padx=8)
+
+        self.lbl_output  = ctk.CTkLabel(bar, text="output/ : —",
+                                        font=ctk.CTkFont(size=10), text_color="white")
+        self.lbl_output.pack(side="left", padx=8)
+
+        self.lbl_free    = ctk.CTkLabel(bar, text="디스크 여유 : —",
+                                        font=ctk.CTkFont(size=10), text_color=GRAY)
+        self.lbl_free.pack(side="left", padx=8)
+
+        ctk.CTkButton(bar, text="↻", width=28, height=22,
+                      fg_color="transparent", hover_color="#2a2a3e",
+                      font=ctk.CTkFont(size=12),
+                      command=self._refresh_storage).pack(side="right", padx=8)
+
+        self._refresh_storage()
+
+    def _refresh_storage(self):
+        def calc():
+            def dir_size(p: Path) -> int:
+                return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+            def fmt(b: int) -> str:
+                for unit in ("B", "KB", "MB", "GB"):
+                    if b < 1024:
+                        return f"{b:.1f} {unit}"
+                    b /= 1024
+                return f"{b:.1f} TB"
+
+            m_size = dir_size(proc.models_dir) if proc.models_dir.exists() else 0
+            o_size = dir_size(proc.output_dir)  if proc.output_dir.exists()  else 0
+            free   = shutil.disk_usage(Path(".")).free
+
+            self.after(0, lambda: (
+                self.lbl_models.configure(text=f"models/ : {fmt(m_size)}"),
+                self.lbl_output.configure(text=f"output/ : {fmt(o_size)}"),
+                self.lbl_free.configure(text=f"디스크 여유 : {fmt(free)}"),
+            ))
+
+        threading.Thread(target=calc, daemon=True).start()
+
+    # ─────────────────────────────────────────────
     # 로그 박스 (탭 아래 공용)
     # ─────────────────────────────────────────────
     def _log_box(self):
@@ -332,6 +492,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             self.progress.stop()
             self.progress.configure(mode="determinate")
             self.progress.set(1 if not busy else 0)
+            self._refresh_storage()   # 작업 완료 후 자동 갱신
 
     def _run(self, fn, btn=None, btn_label=""):
         if self.busy:
